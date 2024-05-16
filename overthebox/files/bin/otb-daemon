@@ -10,7 +10,7 @@ otb_save_event start
 id=$(uci -q get overthebox.me.action_id)
 
 if [ -n "$id" ]; then
-	otb_todo otb_device_post "actions/$id" -d@- <<-EOF
+	otb_todo otb_device_put "actions/$id" -d@- <<-EOF
 	{"status":"done"}
 	EOF
 	uci -q batch <<-EOF
@@ -37,12 +37,16 @@ _run() {
 		[ -f "$file" ] && (. "$file") && rm -f "$file"
 	done
 
-	ret=$(otb_device_get actions --dump-header "$OTB_HEADERS_FILE") || return
+	ret=$(otb_device_get actions/todo --dump-header "$OTB_HEADERS_FILE") || {
+		sleep 30
+		return
+	}
 
-	if [ -z "$OTB_SERVICE_ID" ]; then
+	if [ -z "$OTB_SERVICE_ID" ] || [ "$(echo "$ret" | jq -r '.class' 2>/dev/null)" = "Client::Unauthorized" ]; then
 		read -r LINE < "$OTB_HEADERS_FILE"
 		case "$LINE" in
-			HTTP*401*) otb_err "Got 401: resubscribe" ; otb-subscribe ; return ;;
+			HTTP*403*) otb_err "Got 403: resubscribe" ; otb-subscribe ; return ;;
+			HTTP*401*) otb_err "Got 401: renewing jwt" ; otb-renew-jwt ; return ;;
 		esac
 	fi
 
@@ -53,11 +57,11 @@ _run() {
 
 	details=$(otb-action-"$action" "$ret" 2>&1) && status="done" || status="error"
 	otb_debug "Got status '$status' for action '$action'"
-	[ -z "$id" ] || [ "$id" = "null" ] && return
+	[ -z "$id" ] || [ "$id" = "null" ] || [ "$action" = "wait" ] && return
 
 	# shellcheck disable=SC2016
 	jq -c -n --arg status "$status" --arg details "$details" \
-		'{status: $status, details: $details}' | otb_device_post "actions/$id" -d@-
+		'{status: $status, details: $details}' | otb_device_put "actions/$id" -d@-
 }
 
 RUNNING=1

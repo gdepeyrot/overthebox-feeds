@@ -10,7 +10,11 @@ ME=$(basename "$0")
 
 [ "$OTB_SERVICE_ID" ]
 
-config=$(otb_device_get config)
+config="$(otb_device_get config | jq -r .)"
+if [ -z "$config" ]; then
+	otb_info "failed to get configuration"
+	return
+fi
 
 _get() {
 	otb_json_get "$config" "$1"
@@ -25,7 +29,7 @@ fi
 
 # delete last conf
 
-for conf in glorytun shadowsocks graph; do
+for conf in glorytun shadowsocks graph otb-graph; do
 	true > /etc/config/"$conf"
 	uci -q revert "$conf"
 done
@@ -43,7 +47,7 @@ _setup_glorytun() {
 
 	delete network.\(.dev)
 	set network.\(.dev)=interface
-	set network.\(.dev).ifname=\(.dev)
+	set network.\(.dev).device=\(.dev)
 	set network.\(.dev).proto=static
 	set network.\(.dev).ipaddr=\(.ip_local)
 	set network.\(.dev).netmask=255.255.255.0
@@ -75,7 +79,7 @@ _setup_glorytun_mud() {
 
 	delete network.\(.dev)
 	set network.\(.dev)=interface
-	set network.\(.dev).ifname=\(.dev)
+	set network.\(.dev).device=\(.dev)
 	set network.\(.dev).proto=static
 	set network.\(.dev).ipaddr=\(.ip_local)
 	set network.\(.dev).netmask=255.255.255.0
@@ -140,6 +144,9 @@ set system.@system[0].log_prefix=$(_get log_conf.key)
 set graph.opentsdb=opentsdb
 set graph.opentsdb.url=$(_get graph_conf.host)
 set graph.opentsdb.freq=$(_get graph_conf.write_frequency)
+
+set graph.provisioning=provisioning
+set graph.provisioning.freq=$(_get graph_conf.write_frequency)
 
 commit
 EOF

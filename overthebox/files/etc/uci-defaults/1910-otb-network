@@ -10,12 +10,12 @@
 	set network.lan.proto=static
 	set network.lan.ipaddr=192.168.100.1
 	set network.lan.netmask=255.255.255.0
-	set network.lan.ifname=eth0
 	EOF
 
 uci -q batch <<EOF
 delete network.none
 delete network.if6rd
+delete network.wan6
 reorder network.loopback=0
 reorder network.globals=1
 reorder network.lan=2
@@ -56,24 +56,24 @@ _setup_dhcp() {
 }
 
 _setup_macvlan() {
-	uci -q get "network.$1_dev.ifname" >/dev/null && return
+	uci -q get "network.$1_dev.device" >/dev/null && return
 
 	# do not create a macvlan for a VLAN interface
-	local _ifname
-	_ifname=$(uci -q get "network.$1.ifname")
-	case "$_ifname" in
+	local _device
+	_device=$(uci -q get "network.$1.device")
+	case "$_device" in
 	eth*.*) return ;;
 	esac
 
 	# do not create a macvlan if the lan is not a macvlan
-	[ "$1" = "lan" ] && [ "$_ifname" != "lan" ] && return
+	[ "$1" = "lan" ] && [ "$_device" != "lan" ] && return
 
 	uci -q batch <<-EOF
 	set network.$1_dev=device
 	set network.$1_dev.name=$1
 	set network.$1_dev.type=macvlan
-	set network.$1_dev.ifname=eth0
-	set network.$1.ifname=$1
+	set network.$1_dev.device=eth0
+	set network.$1.device=$1
 	EOF
 	_macaddr=$(uci -q get "network.$1.macaddr")
 	_setup_macaddr "$1" "${_macaddr:-auto$(date +%s)}"
@@ -100,7 +100,7 @@ _fix_old_vlan() {
 		delete network.$1.type
 		delete network.$1.interface
 		delete network.$1.macaddr
-		set network.$1.ifname=$_iface
+		set network.$1.device=$_iface
 		EOF
 		;;
 	esac
@@ -134,10 +134,22 @@ config_load network
 config_foreach _rename_to_ifX interface
 
 _setup() {
-	# Disable ipv6 on all interfaces
-	uci -q set "network.$1.ipv6=0"
+	# Disable ipv6 on all interfaces except for loopback
+	[ "$1" != "loopback" ] && {
+			uci -q set "network.$1.ipv6=0"
+			uci commit 
+		}
+	[ "$1" = "loopback" ] && {
+		uci -q set "network.$1.ipv6=1"
+		uci commit 
+	}
 
 	case "$1" in
+	wan?6)
+		uci -q batch <<-EOF
+		delete network.$1
+		EOF
+		;;
 	wan?*)
 		uci -q batch <<-EOF
 		set network.$1.metric=${1#wan}
@@ -176,8 +188,8 @@ _setup() {
 		;;
 	esac
 }
-config_load network
-config_foreach _setup interface
+	config_load network
+	config_foreach _setup interface
 
 # Add the lan as a named routing table
 if ! grep -s -q "lan" /etc/iproute2/rt_tables; then

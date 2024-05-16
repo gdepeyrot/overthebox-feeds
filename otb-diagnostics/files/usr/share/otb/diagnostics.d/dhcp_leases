@@ -1,0 +1,7 @@
+#!/bin/sh
+# vim: set noexpandtab tabstop=4 shiftwidth=4 softtabstop=4 :
+
+set -ex
+
+dhcp_lease_file=$(uci get dhcp.@dnsmasq[0].leasefile)
+cat "$dhcp_lease_file"

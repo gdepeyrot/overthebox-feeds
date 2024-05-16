@@ -5,8 +5,8 @@ OTB_TODO_DIR="/tmp/otb-todo"
 OTB_DATA_DIR="/tmp/otb-data"
 OTB_HEADERS_FILE="/tmp/otb-daemon-headers"
 OTB_CONFIG_CHECK_DIR="/usr/share/otb/config-check.d"
-OTB_PROVISIONING="provisionning.overthebox.net:4443"
-OTB_PROVISIONING_IP="213.186.33.11"
+OTB_PROVISIONING="otb.eu.ovhapis.com"
+OTB_SERVICE_API="169.254.254.1"
 
 mkdir -p "$OTB_DATA_DIR" "$OTB_TODO_DIR"
 
@@ -61,14 +61,14 @@ otb_call() {
 	method=$1
 	path=$2
 	shift 2
+	jwt="$(uci get overthebox.me.jwt 2>/dev/null || true)"
 	otb_debug "call: $method $path $*"
 	curl --silent --show-error --max-time 5 \
 		-X "$method" \
 		-H "Content-Type: application/json" \
-		-H "X-Auth-OVH: $OTB_TOKEN" \
 		-H "X-Overthebox-Version: $(cat /etc/otb-version || echo 0.0-0)" \
-		"https://$OTB_PROVISIONING/$path" \
-		--resolve "$OTB_PROVISIONING:$OTB_PROVISIONING_IP" \
+		${jwt:+-H "Authorization: Bearer $jwt"} \
+		"https://$OTB_PROVISIONING/1.0/$path" \
 		"$@"
 }
 
@@ -81,8 +81,14 @@ otb_call_api() {
 	curl --silent --show-error --max-time 1 \
 		-X "$method" \
 		-H "Content-Type: application/json" \
-		"http://api/$path" \
+		"http://$OTB_SERVICE_API/$path" \
 		"$@"
+}
+
+otb_device_put() {
+	subpath=$1
+	shift 1
+	[ "$OTB_DEVICE_ID" ] && otb_call PUT "devices/$OTB_DEVICE_ID/$subpath" "$@"
 }
 
 otb_device_post() {
@@ -95,6 +101,12 @@ otb_device_get() {
 	subpath=$1
 	shift 1
 	[ "$OTB_DEVICE_ID" ] && otb_call GET "devices/$OTB_DEVICE_ID/$subpath" "$@"
+}
+
+otb_service_put() {
+	subpath=$1
+	shift 1
+	[ "$OTB_SERVICE_ID" ] && otb_device_put "service/$OTB_SERVICE_ID/$subpath" "$@"
 }
 
 otb_service_post() {
@@ -143,6 +155,41 @@ otb_save_action_id() {
 	set overthebox.me.action_id=$id
 	commit overthebox
 	EOF
+}
+
+speedtest() {
+	local ipaddr gateway
+
+	network_get_ipaddr ipaddr "$1"
+	[ "$ipaddr" ] || return
+
+	network_get_gateway gateway "$1"
+	[ "$gateway" ] || return
+
+	do_iperf() {
+		iperf3 --client "$server_ip" --port 5008 \
+		       --time "$test_time" --omit "$skip_test_time" \
+		       --bind "$ipaddr" --json "$@" \
+			   | jq "(.end.sum_received.bits_per_second // 0) / 1000 | floor"
+	}
+
+	# loop five times max to handle speedtest timeout when determining upload speed
+	for i in $(seq 1 1 5); do
+		upload="$(do_iperf)" || return
+		if [ "$upload" -ne 0 ]; then
+			break
+		fi
+	done
+
+	# loop five times max to handle speedtest timeout when determining download speed
+	for i in $(seq 1 1 5); do
+		download="$(do_iperf -R)" || return
+		if [ "$download" -ne 0 ]; then
+			break
+		fi
+	done
+
+	printf "%8s %8s" "$upload" "$download"
 }
 
 otb_led() {
